@@ -164,8 +164,8 @@ twitter-config.json
 # Privy keys
 privy-*.json
 
-# Solana keypairs
-*.json
+# Wallet keypair files (do NOT use a blanket *.json — it would also ignore
+# package.json / tsconfig.json / package-lock.json)
 wallet.json
 keypair.json
 

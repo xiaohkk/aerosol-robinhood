@@ -1006,18 +1006,14 @@ async function start(): Promise<void> {
         process.exit(1); // Exit if DB connection fails critically on start
     }
 
-    const scraper = new Scraper();
-    try {
-        console.log(`Attempting to log in to Twitter as ${process.env.MY_USERNAME}...`);
-        await scraper.login(
-            process.env.MY_USERNAME || '',
-            process.env.PASSWORD || '',
-            process.env.EMAIL || ''
-        );
+    // Twitter login is best-effort. If it fails (X guest-token/library issues,
+    // rate limiting, or bad credentials) the service must stay up so the HTTP API,
+    // health check and database keep working — only Twitter polling is disabled.
+    const scraper = await loginWithRetry();
+    if (!scraper) {
+        console.warn('⚠️  Twitter login failed after retries — starting without the Twitter bot. HTTP API and health check will still run.');
+    } else {
         console.log('Twitter login successful!');
-    } catch (error) {
-        console.error('Fatal Error: Twitter login failed:', error);
-        process.exit(1);
     }
 
     const privyClient = new PrivyClient(
@@ -1038,7 +1034,7 @@ async function start(): Promise<void> {
     let consecutiveEmptyRuns = 0;
     let isPolling = false;
     
-    const startAdaptivePolling = async () => {
+    const startAdaptivePolling = async (scraper: Scraper) => {
       if (isPolling) return;
       isPolling = true;
       
@@ -1079,8 +1075,12 @@ async function start(): Promise<void> {
       adaptivePoll();
     };
     
-    // Start the adaptive polling system
-    startAdaptivePolling();
+    // Start the adaptive polling system only when we have an authenticated Twitter session
+    if (scraper) {
+        startAdaptivePolling(scraper);
+    } else {
+        console.warn('Twitter polling disabled — no authenticated Twitter session. Service will run API/health only.');
+    }
 
     console.log(`[Start Function] Effective PORT from environment: ${process.env.PORT}`);
     console.log(`[Start Function] Port variable set to: ${port}`);

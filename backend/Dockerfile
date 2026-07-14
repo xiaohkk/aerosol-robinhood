@@ -19,4 +19,4 @@ RUN npm run build
 RUN npm prune --production
 
 # Start the application
-CMD ["node", "dist/server.js"] 
+CMD ["node", "dist/bot/samplebot.js"] 

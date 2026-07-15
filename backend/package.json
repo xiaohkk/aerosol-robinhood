@@ -18,14 +18,15 @@
     "@langchain/ollama": "^0.1.0",
     "@privy-io/server-auth": "^1.18.0",
     "@supabase/supabase-js": "^2.45.0",
-    "agent-twitter-client": "0.0.18",
+    "@the-convocation/twitter-scraper": "^0.22.3",
     "axios": "^1.7.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "ioredis": "^5.4.1",
     "node-cron": "^3.0.3",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "x-client-transaction-id": "^0.3.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

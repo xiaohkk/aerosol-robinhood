@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { Scraper, SearchMode } from 'agent-twitter-client';
+import { XScraper as Scraper, SearchMode } from './xClient';
 // @ts-ignore: no declaration file for module 'node-cron'
 import cron from 'node-cron';
 import { getUsername } from '@/types/username';
@@ -796,27 +796,26 @@ async function isFirstStartup(): Promise<boolean> {
 
 // Cookie auth: copy the `auth_token` and `ct0` cookies from a browser that is
 // logged in as the bot account into TWITTER_AUTH_TOKEN / TWITTER_CT0. This
-// bypasses agent-twitter-client's fragile username/password login flow, which
-// was failing with Twitter error 34 ("that page does not exist").
+// bypasses the fragile username/password login flow, which was failing with
+// Twitter error 34 ("that page does not exist").
 async function loginScraperWithCookies(): Promise<Scraper | null> {
   const authToken = process.env.TWITTER_AUTH_TOKEN;
   const ct0 = process.env.TWITTER_CT0;
   if (!authToken || !ct0) return null;
   try {
     const scraper = new Scraper();
-    // agent-twitter-client@0.0.18 hits twitter.com internally and tough-cookie
-    // rejects any cookie whose Domain isn't in that host (an .x.com cookie throws
-    // "Cookie not in this host's domain" and aborts the whole setCookies call).
-    // So set the session cookies on .twitter.com only.
+    // The scraper hits https://x.com internally and its setCookies() stores
+    // cookies against that URL, so the session cookies must be scoped to .x.com
+    // (a .twitter.com cookie would throw "Cookie not in this host's domain" and
+    // abort the whole setCookies call).
     await scraper.setCookies([
-      `auth_token=${authToken}; Domain=.twitter.com; Path=/; Secure; HttpOnly`,
-      `ct0=${ct0}; Domain=.twitter.com; Path=/; Secure`,
+      `auth_token=${authToken}; Domain=.x.com; Path=/; Secure; HttpOnly`,
+      `ct0=${ct0}; Domain=.x.com; Path=/; Secure`,
     ]);
 
-    // isLoggedIn() in agent-twitter-client@0.0.18 can be a false negative (it
-    // hits an endpoint that current Twitter/X may have changed). Don't hard-fail
-    // on it — if it passes, great; if not, proceed best-effort and let the first
-    // mention poll reveal whether the cookies actually work.
+    // Don't hard-fail on isLoggedIn() — if it passes, great; if not, proceed
+    // best-effort and let the first mention poll reveal whether the cookies
+    // actually work.
     let loggedIn = false;
     try {
       loggedIn = await scraper.isLoggedIn();

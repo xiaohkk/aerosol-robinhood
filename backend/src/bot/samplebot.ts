@@ -616,11 +616,18 @@ async function main(scraper: Scraper, privyClient: PrivyClient, llm: ChatGroq | 
     }
         
     console.log(`Fetching tweets mentioning @${myUsername}...`);
-    // Two independent sources, unioned for reliability:
-    //  - the notifications "Mentions" tab (not subject to search indexing), and
-    //  - Latest search (catches anything the notifications tab misses).
-    // Either alone can miss mentions, so we merge and dedupe by tweet id.
-    const [mentionsResult, searchResult] = await Promise.all([
+    // Three independent sources, unioned for reliability:
+    //  - the official X API v2 mentions endpoint (paid; the only source that
+    //    surfaces mentions to a throttled brand-new account — inert until
+    //    X_API_BEARER_TOKEN is set),
+    //  - the cookie-session notifications "Mentions" tab, and
+    //  - Latest search.
+    // Any one can miss mentions, so we merge and dedupe by tweet id.
+    const [apiResult, mentionsResult, searchResult] = await Promise.all([
+      scraper.fetchMentionsV2(myUsername).catch((e: any) => {
+        console.warn('fetchMentionsV2 failed:', e?.message || e);
+        return { tweets: [] as any[] };
+      }),
       scraper.fetchMentions().catch((e: any) => {
         console.warn('fetchMentions failed (falling back to search only):', e?.message || e);
         return { tweets: [] as any[] };
@@ -634,13 +641,13 @@ async function main(scraper: Scraper, privyClient: PrivyClient, llm: ChatGroq | 
     ]);
 
     const rawById = new Map<string, any>();
-    for (const t of [...mentionsResult.tweets, ...searchResult.tweets]) {
+    for (const t of [...apiResult.tweets, ...mentionsResult.tweets, ...searchResult.tweets]) {
       const id = t.id_str || t.id;
       if (id) rawById.set(String(id), t);
     }
     const rawTweets = Array.from(rawById.values());
     console.log(
-      `Seen ${rawTweets.length} tweets (mentions: ${mentionsResult.tweets.length}, search: ${searchResult.tweets.length}).`
+      `Seen ${rawTweets.length} tweets (api: ${apiResult.tweets.length}, mentions: ${mentionsResult.tweets.length}, search: ${searchResult.tweets.length}).`
     );
 
     const formattedTweets = rawTweets.map((tweet: any): Tweet => ({

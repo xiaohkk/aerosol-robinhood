@@ -38,6 +38,48 @@ const MENTIONS_URL =
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
+// ---------------------------------------------------------------------------
+// Official X API v2 mention discovery (optional, paid).
+//
+// The cookie-session search/notifications paths above can't surface mentions to
+// a brand-new/low-reputation account — X throttles mention *discovery* for such
+// accounts as anti-spam. The official GET /2/users/:id/mentions endpoint is the
+// authoritative source and is immune to that throttling, but it is a paid,
+// credit-metered read authenticated with an App Bearer Token (distinct from the
+// web cookie session).
+//
+// This whole path is inert unless X_API_BEARER_TOKEN is set, so the bot runs
+// unchanged (cookie-only) until credits + a token are configured.
+const X_API_BEARER_TOKEN = process.env.X_API_BEARER_TOKEN;
+// Cap the per-call page size (each read costs credits). 5..100 per the API.
+const X_API_MAX_RESULTS = Math.min(
+  100,
+  Math.max(5, parseInt(process.env.X_MENTIONS_MAX_RESULTS || '25', 10) || 25)
+);
+// Minimum spacing between paid mention reads, so the adaptive fast-poll loop
+// (which can drop to a 5s cadence) doesn't multiply API spend. Defaults to 55s.
+const X_API_MIN_INTERVAL_MS =
+  parseInt(process.env.X_MENTIONS_POLL_MS || '55000', 10) || 55000;
+
+let lastV2FetchAt = 0;
+let cachedV2UserId: string | null = process.env.X_API_USER_ID || null;
+
+// Resolve (and cache) the account's numeric id from its username via the v2
+// API, so the numeric id doesn't have to be configured by hand.
+async function resolveV2UserId(username: string): Promise<string | null> {
+  if (cachedV2UserId) return cachedV2UserId;
+  const res = await fetch(
+    `https://api.x.com/2/users/by/username/${encodeURIComponent(username)}`,
+    { headers: { authorization: `Bearer ${X_API_BEARER_TOKEN}` } }
+  );
+  if (!res.ok) {
+    throw new Error(`resolveV2UserId failed: HTTP ${res.status}`);
+  }
+  const body: any = await res.json().catch(() => null);
+  cachedV2UserId = body?.data?.id ?? null;
+  return cachedV2UserId;
+}
+
 const CREATE_TWEET_FEATURES = {
   premium_content_api_read_enabled: false,
   communities_web_enable_tweet_community_results_fetch: true,
@@ -219,6 +261,81 @@ export class XScraper extends Scraper {
         };
       })
       .filter((t): t is any => t !== null);
+
+    return { tweets };
+  }
+
+  /**
+   * Fetches mentions via the official X API v2 (GET /2/users/:id/mentions).
+   * This is the authoritative source and, unlike cookie-session search /
+   * notifications, surfaces mentions even to brand-new accounts that X
+   * throttles from discovery. Paid (credit-metered), so:
+   *   - inert unless X_API_BEARER_TOKEN is configured, and
+   *   - self-throttled to at most one read per X_MENTIONS_POLL_MS.
+   *
+   * Returns the same `{ tweets }` shape as fetchMentions/fetchSearchTweets.
+   *
+   * @param username the account whose mentions to fetch (e.g. MY_USERNAME).
+   */
+  async fetchMentionsV2(username: string): Promise<{ tweets: any[] }> {
+    if (!X_API_BEARER_TOKEN) return { tweets: [] };
+
+    // Throttle paid reads independently of the adaptive poll cadence.
+    const now = Date.now();
+    if (now - lastV2FetchAt < X_API_MIN_INTERVAL_MS) return { tweets: [] };
+    lastV2FetchAt = now;
+
+    const userId = await resolveV2UserId(username);
+    if (!userId) throw new Error('fetchMentionsV2: could not resolve user id');
+
+    const url =
+      `https://api.x.com/2/users/${userId}/mentions` +
+      `?max_results=${X_API_MAX_RESULTS}` +
+      `&tweet.fields=created_at,conversation_id,entities,author_id,referenced_tweets` +
+      `&expansions=author_id` +
+      `&user.fields=username,name`;
+
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${X_API_BEARER_TOKEN}` },
+    });
+    if (!res.ok) {
+      throw new Error(
+        `fetchMentionsV2 failed: HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`
+      );
+    }
+    const body: any = await res.json().catch(() => null);
+    const data: any[] = body?.data ?? [];
+    const usersById = new Map<string, any>(
+      (body?.includes?.users ?? []).map((u: any) => [u.id, u])
+    );
+
+    // Map the v2 shape onto the raw fields the caller's formatter reads
+    // (id_str / full_text / entities.user_mentions / user.* / created_at).
+    const tweets = data.map((t: any) => {
+      const author = usersById.get(t.author_id);
+      const repliedTo = (t.referenced_tweets ?? []).find(
+        (r: any) => r.type === 'replied_to'
+      );
+      return {
+        id_str: t.id,
+        full_text: t.text,
+        created_at: t.created_at,
+        conversation_id_str: t.conversation_id,
+        in_reply_to_status_id_str: repliedTo?.id,
+        is_quote_status: (t.referenced_tweets ?? []).some((r: any) => r.type === 'quoted'),
+        retweeted_status: (t.referenced_tweets ?? []).some((r: any) => r.type === 'retweeted')
+          ? {}
+          : undefined,
+        entities: {
+          user_mentions: (t.entities?.mentions ?? []).map((m: any) => ({
+            screen_name: m.username,
+          })),
+        },
+        user: author
+          ? { id_str: author.id, screen_name: author.username, name: author.name }
+          : undefined,
+      };
+    });
 
     return { tweets };
   }

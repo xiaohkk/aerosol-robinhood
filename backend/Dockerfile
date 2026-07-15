@@ -6,9 +6,6 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Patches must be present before install: postinstall runs patch-package
-COPY patches ./patches
-
 # Install dependencies
 RUN npm ci
 

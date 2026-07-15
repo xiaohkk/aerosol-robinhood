@@ -804,16 +804,32 @@ async function loginScraperWithCookies(): Promise<Scraper | null> {
   if (!authToken || !ct0) return null;
   try {
     const scraper = new Scraper();
-    await scraper.setCookies([
-      `auth_token=${authToken}; Domain=.twitter.com; Path=/; Secure; HttpOnly`,
-      `ct0=${ct0}; Domain=.twitter.com; Path=/; Secure`,
-    ]);
-    if (await scraper.isLoggedIn()) {
-      console.log('✅ Twitter cookie auth successful.');
-      return scraper;
+    // Set on both twitter.com and x.com — depending on which host the library
+    // hits internally, the cookie jar must have a matching domain or it won't
+    // attach the session cookies.
+    const cookieStrings: string[] = [];
+    for (const domain of ['.twitter.com', '.x.com']) {
+      cookieStrings.push(`auth_token=${authToken}; Domain=${domain}; Path=/; Secure; HttpOnly`);
+      cookieStrings.push(`ct0=${ct0}; Domain=${domain}; Path=/; Secure`);
     }
-    console.error('❌ Twitter cookie auth failed: session not valid (auth_token/ct0 expired or incorrect).');
-    return null;
+    await scraper.setCookies(cookieStrings);
+
+    // isLoggedIn() in agent-twitter-client@0.0.18 can be a false negative (it
+    // hits an endpoint that current Twitter/X may have changed). Don't hard-fail
+    // on it — if it passes, great; if not, proceed best-effort and let the first
+    // mention poll reveal whether the cookies actually work.
+    let loggedIn = false;
+    try {
+      loggedIn = await scraper.isLoggedIn();
+    } catch (e) {
+      console.warn('isLoggedIn() check threw (treating as inconclusive):', e);
+    }
+    if (loggedIn) {
+      console.log('✅ Twitter cookie auth successful (isLoggedIn confirmed).');
+    } else {
+      console.warn('⚠️  Twitter cookie session not confirmed by isLoggedIn(); proceeding best-effort — polling will reveal actual auth state.');
+    }
+    return scraper;
   } catch (err) {
     console.error('❌ Twitter cookie auth error:', err);
     return null;

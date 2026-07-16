@@ -539,6 +539,47 @@ app.get('/api/transactions/:id', async (req, res) => {
   }
 });
 
+// Cancel a pending request (sender changed their mind). Only pending
+// transactions can be cancelled — completed ones are left untouched.
+app.post('/api/transactions/cancel', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Transaction ID is required' });
+      return;
+    }
+
+    const { supabase } = await connectToSupabase();
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .update({ status: 'cancelled' })
+      .eq('id', id)
+      .eq('status', 'pending')
+      .select()
+      .single();
+
+    if (error) {
+      // No row matched the id+pending filter (already completed/cancelled, or missing).
+      if (error.code === 'PGRST116') {
+        res.status(409).json({ success: false, error: 'Transaction is not pending (already completed, cancelled, or not found)' });
+        return;
+      }
+      console.error('Supabase error cancelling transaction:', error);
+      res.status(500).json({ success: false, error: error.message });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: 'Transaction cancelled', transaction: { id: data.id, status: data.status } });
+  } catch (error) {
+    console.error('Error cancelling transaction:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'An unexpected error occurred',
+    });
+  }
+});
+
 app.post('/api/transactions/complete', async (req, res) => {
   try {
     const { id, signature, senderAddress } = req.body;

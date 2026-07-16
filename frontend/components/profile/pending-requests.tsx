@@ -35,6 +35,7 @@ export function PendingRequests({ twitterUsername }: PendingRequestsProps) {
   const [requests, setRequests] = useState<PendingTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const fetchRequests = useCallback(async () => {
     if (!twitterUsername) return;
@@ -57,6 +58,28 @@ export function PendingRequests({ twitterUsername }: PendingRequestsProps) {
       setLoading(false);
     }
   }, [twitterUsername]);
+
+  const handleCancel = useCallback(async (id: string) => {
+    setCancellingId(id);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/transactions/cancel`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to cancel");
+      // Drop it from the list immediately.
+      setRequests((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      console.error("Error cancelling request:", err);
+    } finally {
+      setCancellingId(null);
+    }
+  }, []);
 
   useEffect(() => {
     fetchRequests();
@@ -129,13 +152,24 @@ export function PendingRequests({ twitterUsername }: PendingRequestsProps) {
                 </div>
               </div>
 
-              <Button
-                onClick={() => router.push(`/approve/${req.id}`)}
-                className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white"
-                size="sm"
-              >
-                Approve &amp; Send
-              </Button>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <Button
+                  onClick={() => router.push(`/approve/${req.id}`)}
+                  className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white"
+                  size="sm"
+                  disabled={cancellingId === req.id}
+                >
+                  Approve &amp; Send
+                </Button>
+                <Button
+                  onClick={() => handleCancel(req.id)}
+                  variant="outline"
+                  size="sm"
+                  disabled={cancellingId === req.id}
+                >
+                  {cancellingId === req.id ? "Cancelling…" : "Cancel"}
+                </Button>
+              </div>
             </div>
           ))}
         </div>

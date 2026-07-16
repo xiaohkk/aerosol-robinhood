@@ -25,6 +25,7 @@ export default function TransactionApprovalPage() {
   const { user } = usePrivy();
   const { wallets } = useWallets();
   const [isLoading, setIsLoading] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [isLoadingTransaction, setIsLoadingTransaction] = useState(true);
   const [walletBalance, setWalletBalance] = useState<string | null>(null);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
@@ -242,6 +243,26 @@ export default function TransactionApprovalPage() {
     }
   };
 
+  const handleCancelTransaction = async () => {
+    if (!transaction) {
+      router.push("/profile");
+      return;
+    }
+    setIsCancelling(true);
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/transactions/cancel`, {
+        id: transaction.id,
+      });
+      toast.success("Request cancelled");
+    } catch (error: any) {
+      // e.g. already completed — inform, then still leave the screen.
+      toast.error(error.response?.data?.error || "Could not cancel this request");
+    } finally {
+      setIsCancelling(false);
+      router.push("/profile");
+    }
+  };
+
   if (isLoadingTransaction) {
     return (
       <div className="container mx-auto max-w-md py-12 px-4">
@@ -348,14 +369,14 @@ export default function TransactionApprovalPage() {
                 {isLoading ? "Processing..." : "Approve & Send"}
               </Button>
               
-              {/* KEEP: Only redirect to profile when user cancels */}
-              <Button 
-                onClick={() => router.push("/profile")}
+              {/* Cancels the pending request (marks it cancelled), then leaves */}
+              <Button
+                onClick={handleCancelTransaction}
                 variant="outline"
                 className="w-full"
-                disabled={isLoading}
+                disabled={isLoading || isCancelling}
               >
-                Cancel
+                {isCancelling ? "Cancelling…" : "Cancel Request"}
               </Button>
               
               <div className="text-center text-sm text-gray-500 mt-4">

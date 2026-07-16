@@ -682,23 +682,32 @@ async function main(scraper: Scraper, privyClient: PrivyClient, llm: ChatGroq | 
       const lastRepliedTweetId = await loadLastRepliedTweetId();
       console.log('Last replied tweet ID from Redis:', lastRepliedTweetId);
 
-      // CRITICAL FIX: When starting fresh (no lastRepliedTweetId), set it to the newest tweet
-      // to prevent replying to old tweets
       let lastRepliedTweetIdNum: bigint;
       let latestProcessedTweetId: bigint;
-      
+
       const isFirstStart = await isFirstStartup();
-      
+
       if (!lastRepliedTweetId || isFirstStart) {
-        // First startup - find the newest tweet and set that as our baseline
-        const newestTweet = formattedTweets.reduce((newest, current) => 
-          BigInt(current.id) > BigInt(newest.id) ? current : newest
-        );
-        lastRepliedTweetIdNum = BigInt(newestTweet.id);
+        // First startup (or Redis has no saved state). Baseline only the tweets
+        // that are already older than the 1-hour spam window, so anything from
+        // the last hour is still treated as new and gets processed — but old
+        // mentions are ignored. If every mention is old, baseline to the newest
+        // (skip all); if every mention is recent, baseline to 0 (process all).
+        const maxAgeMs = 60 * 60 * 1000;
+        const now = Date.now();
+        const oldTweetIds = formattedTweets
+          .filter(t => now - t.timestamp * 1000 > maxAgeMs)
+          .map(t => BigInt(t.id));
+        lastRepliedTweetIdNum = oldTweetIds.length
+          ? oldTweetIds.reduce((m, c) => (c > m ? c : m))
+          : 0n;
         latestProcessedTweetId = lastRepliedTweetIdNum;
-        console.log(`🚀 ${isFirstStart ? 'First startup' : 'No previous state'} detected! Setting baseline to newest tweet: ${newestTweet.id} (${newestTweet.timeParsed})`);
-        console.log(`📝 This prevents replying to old tweets. Only NEW tweets after this will be processed.`);
-        console.log(`⏰ Additionally, tweets older than 1 hour will be ignored to prevent spam.`);
+        console.log(`🚀 ${isFirstStart ? 'First startup' : 'No previous state'} detected. Baseline set to ${lastRepliedTweetIdNum} (ignoring mentions >1h old; recent ones will still be processed).`);
+        // Persist the baseline right away. Without this, a first start whose
+        // mentions are all old never advances the high-water mark, so nothing
+        // gets saved and every subsequent poll re-runs first-start logic —
+        // skipping every mention forever.
+        await saveLastRepliedTweetId(lastRepliedTweetIdNum.toString());
       } else {
         lastRepliedTweetIdNum = BigInt(lastRepliedTweetId);
         latestProcessedTweetId = lastRepliedTweetIdNum;
